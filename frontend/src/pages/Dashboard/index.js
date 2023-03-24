@@ -14,6 +14,9 @@ import SpeedIcon from "@material-ui/icons/Speed";
 import GroupIcon from "@material-ui/icons/Group";
 import AssignmentIcon from "@material-ui/icons/Assignment";
 import PersonIcon from "@material-ui/icons/Person";
+import TodayIcon from '@material-ui/icons/Today';
+import BlockIcon from '@material-ui/icons/Block';
+import DoneIcon from '@material-ui/icons/Done';
 
 import { makeStyles } from "@material-ui/core/styles";
 import { grey, blue } from "@material-ui/core/colors";
@@ -27,6 +30,7 @@ import TableAttendantsStatus from "../../components/Dashboard/TableAttendantsSta
 import { isArray } from "lodash";
 
 import useDashboard from "../../hooks/useDashboard";
+import useCompanies from "../../hooks/useCompanies";
 
 import { isEmpty } from "lodash";
 import moment from "moment";
@@ -77,13 +81,14 @@ const Dashboard = () => {
   const [attendants, setAttendants] = useState([]);
   const [filterType, setFilterType] = useState(1);
   const [period, setPeriod] = useState(0);
+  const [companyDueDate, setCompanyDueDate] = useState();
   const [dateFrom, setDateFrom] = useState(
     moment("1", "D").format("YYYY-MM-DD")
   );
   const [dateTo, setDateTo] = useState(moment().format("YYYY-MM-DD"));
   const [loading, setLoading] = useState(false);
   const { find } = useDashboard();
-
+  const { finding } = useCompanies();
   useEffect(() => {
     async function firstLoad() {
       await fetchData();
@@ -141,6 +146,8 @@ const Dashboard = () => {
 
     const data = await find(params);
 
+
+
     setCounters(data.counters);
     if (isArray(data.attendants)) {
       setAttendants(data.attendants);
@@ -150,6 +157,27 @@ const Dashboard = () => {
 
     setLoading(false);
   }
+
+  useEffect(() => {
+    async function fetchData() {
+      await loadCompanies();
+    }
+    fetchData();
+  }, [])
+  //let companyDueDate = localStorage.getItem("companyDueDate");
+  //const companyDueDate = localStorage.getItem("companyDueDate").toString();
+  const companyId = localStorage.getItem("companyId");
+  const loadCompanies = async () => {
+    setLoading(true);
+    try {
+      const companiesList = await finding(companyId);
+      setCompanyDueDate(moment(companiesList.dueDate).format("DD/MM/yyyy"));
+    } catch (e) {
+      console.log("🚀 Console Log : e", e);
+      // toast.error("Não foi possível carregar a lista de registros");
+    }
+    setLoading(false);
+  };
 
   function formatTime(minutes) {
     return moment()
@@ -218,6 +246,14 @@ const Dashboard = () => {
     <div>
       <Container maxWidth="lg" className={classes.container}>
         <Grid container spacing={3} justifyContent="flex-end">
+          <Grid item xs={12} sm={6} md={3}>
+            <CardCounter
+              icon={<TodayIcon fontSize="inherit" />}
+              title="Data Vencimento"
+              value={companyDueDate}
+              loading={loading}
+            />
+          </Grid>
           <Grid item xs={12}>
             <Paper className={classes.fixedHeightPaper}>
               <Chart />

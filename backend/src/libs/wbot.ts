@@ -1,19 +1,19 @@
 import * as Sentry from "@sentry/node";
 import makeWASocket, {
-  WASocket,
+  AnyWASocket,
   AuthenticationState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  AuthenticationCreds,
+  LegacyAuthenticationCreds,
   makeInMemoryStore,
-  isJidBroadcast
+  makeWALegacySocket
 } from "@adiwajshing/baileys";
-import makeWALegacySocket from "@adiwajshing/baileys";
 import P from "pino";
 
 import Whatsapp from "../models/Whatsapp";
 import { logger } from "../utils/logger";
 import MAIN_LOGGER from "@adiwajshing/baileys/lib/Utils/logger";
+import authStateLegacy from "../helpers/authStateLegacy";
 import authState from "../helpers/authState";
 import { Boom } from "@hapi/boom";
 import AppError from "../errors/AppError";
@@ -25,7 +25,7 @@ import DeleteBaileysService from "../services/BaileysServices/DeleteBaileysServi
 const loggerBaileys = MAIN_LOGGER.child({});
 loggerBaileys.level = "error";
 
-type Session = WASocket & {
+type Session = AnyWASocket & {
   id?: number;
   store?: Store;
 };
@@ -89,50 +89,37 @@ export const initWASocket = async (whatsapp: Whatsapp): Promise<Session> => {
           logger: loggerBaileys
         });
 
-        const { state, saveState } = await authState(whatsapp);
+        const { state, saveState } = isLegacy
+          ? await authStateLegacy(whatsapp)
+          : await authState(whatsapp);
 
-        wsocket = makeWASocket({
-          version,
-          logger: loggerBaileys,
-          printQRInTerminal: false,
-          auth: state as AuthenticationState,
-          generateHighQualityLinkPreview: false,
-          shouldIgnoreJid: jid => isJidBroadcast(jid),
-          browser: ["Chat", "Chrome", "10.15.7"],
-          patchMessageBeforeSending: (message) => {
-            const requiresPatch = !!(
-                message.buttonsMessage ||
-                // || message.templateMessage
-                message.listMessage
-            );
-            if (requiresPatch) {
-                message = {
-                    viewOnceMessage: {
-                        message: {
-                            messageContextInfo: {
-                                deviceListMetadataVersion: 2,
-                                deviceListMetadata: {},
-                            },
-                            ...message,
-                        },
-                    },
-                };
-            }
+        wsocket = isLegacy
+          ? makeWALegacySocket({
+              logger: loggerBaileys,
+              printQRInTerminal: false,
+              auth: state as LegacyAuthenticationCreds,
+              version
+            })
+          : makeWASocket({
+              logger: loggerBaileys,
+              printQRInTerminal: false,
+              auth: state as AuthenticationState,
+              version
+            });
 
-            return message;
-        },
-        })
+        wsocket.store = store;
 
         wsocket.ev.on(
           "connection.update",
           async ({ connection, lastDisconnect, qr }) => {
             logger.info(
-              `Socket  ${name} Connection Update ${connection || ""} ${lastDisconnect || ""
+              `Socket  ${name} Connection Update ${connection || ""} ${
+                lastDisconnect || ""
               }`
             );
 
             if (connection === "close") {
-              if ((lastDisconnect?.error as Boom)?.output?.statusCode === 403) {
+              if (lastDisconnect?.error?.output?.statusCode === 403) {
                 await whatsapp.update({ status: "PENDING", session: "" });
                 await DeleteBaileysService(whatsapp.id);
                 io.emit(`company-${whatsapp.companyId}-whatsappSession`, {

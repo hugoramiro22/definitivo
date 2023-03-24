@@ -5,8 +5,7 @@ import * as Sentry from "@sentry/node";
 import { isNil, isNull, head } from "lodash";
 
 import {
-  Chat,
-  WASocket,
+  AnyWASocket,
   downloadContentFromMessage,
   extractMessageContent,
   getContentType,
@@ -14,10 +13,12 @@ import {
   MediaType,
   MessageUpsertType,
   proto,
+  WALegacySocket,
   WAMessage,
   BinaryNode,
   WAMessageStubType,
   WAMessageUpdate,
+  WASocket,
 } from "@adiwajshing/baileys";
 import Contact from "../../models/Contact";
 import Ticket from "../../models/Ticket";
@@ -50,16 +51,13 @@ import Setting from "../../models/Setting";
 import Baileys from "../../models/Baileys";
 import { getWbot } from "../../libs/wbot";
 import GetDefaultWhatsApp from "../../helpers/GetDefaultWhatsApp";
-import { CreateOrUpdateBaileysChatService } from "../BaileysChatServices/CreateOrUpdateBaileysChatService";
-import { ShowBaileysChatService } from "../BaileysChatServices/ShowBaileysChatService";
-import Whatsapp from "../../models/Whatsapp";
 
 const puppeteer = require('puppeteer');
 const fs = require('fs')
 const path = require('path');
 var axios = require('axios');
 
-type Session = WASocket & {
+type Session = AnyWASocket & {
   id?: number;
   store?: Store;
 };
@@ -284,33 +282,11 @@ function makeid(length) {
 
 
 const getBodyButton = (msg: proto.IWebMessageInfo): string => {
-  if (msg.key.fromMe && msg.message.buttonsMessage?.contentText) {
-    let bodyMessage = `*${msg?.message?.buttonsMessage?.contentText}*`;
+  if (msg.key.fromMe && msg?.message?.viewOnceMessage?.message?.buttonsMessage?.contentText) {
+    let bodyMessage = `*${msg?.message?.viewOnceMessage?.message?.buttonsMessage?.contentText}*`;
 
-    for (const buton of msg.message?.buttonsMessage?.buttons) {
+    for (const buton of msg.message?.viewOnceMessage?.message?.buttonsMessage?.buttons) {
       bodyMessage += `\n\n${buton.buttonText?.displayText}`;
-    }
-    return bodyMessage;
-  }
-
-  if (msg.key.fromMe && msg?.message?.viewOnceMessage?.message?.listMessage) {
-    let bodyMessage = `*${msg?.message?.viewOnceMessage?.message?.listMessage?.description}*`;
-    for (const buton of msg.message?.viewOnceMessage?.message?.listMessage?.sections) {
-      for (const rows of buton.rows) {
-        bodyMessage += `\n\n${rows.title}`;
-      }
-    }
-
-    return bodyMessage;
-  }
-};
-const getBodyList = (msg: proto.IWebMessageInfo): string => {
-  if (msg.key.fromMe && msg.message.listMessage?.description) {
-    let bodyMessage = `*${msg.message.listMessage?.description}*`;
-    for (const buton of msg.message.listMessage?.sections) {
-      for (const rows of buton.rows) {
-        bodyMessage += `\n\n${rows.title}`;
-      }
     }
     return bodyMessage;
   }
@@ -349,7 +325,7 @@ export const getBodyMessage = (msg: proto.IWebMessageInfo): string | null => {
       buttonsResponseMessage: msg.message.buttonsResponseMessage?.selectedButtonId,
       templateButtonReplyMessage: msg.message?.templateButtonReplyMessage?.selectedId,
       messageContextInfo: msg.message.buttonsResponseMessage?.selectedButtonId || msg.message.listResponseMessage?.title,
-      buttonsMessage: getBodyButton(msg) || msg.message.buttonsMessage?.contentText,
+      buttonsMessage: getBodyButton(msg) || msg.message.listResponseMessage?.singleSelectReply?.selectedRowId,
       viewOnceMessage: getBodyButton(msg) || msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId,
       stickerMessage: "sticker",
       contactMessage: msg.message?.contactMessage?.vcard,
@@ -363,24 +339,21 @@ export const getBodyMessage = (msg: proto.IWebMessageInfo): string | null => {
       liveLocationMessage: `Latitude: ${msg.message.liveLocationMessage?.degreesLatitude} - Longitude: ${msg.message.liveLocationMessage?.degreesLongitude}`,
       documentMessage: msg.message?.documentMessage?.title,
       audioMessage: "Áudio",
-      listMessage: getBodyList(msg) || msg.message.listResponseMessage?.title,
+      listMessage: getBodyButton(msg) || msg.message.listResponseMessage?.title,
       listResponseMessage: msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId,
       reactionMessage: msg.message.reactionMessage?.text || "reaction",
-      senderKeyDistributionMessage: msg.message.senderKeyDistributionMessage?.axolotlSenderKeyDistributionMessage,
-
     };
 
-    /* console.log(msg); */
     const objKey = Object.keys(types).find(key => key === type);
+
     if (!objKey) {
       logger.warn(`#### Nao achou o type 152: ${type}
-  ${JSON.stringify(msg)}`);
+${JSON.stringify(msg)}`);
       Sentry.setExtra("Mensagem", { BodyMsg: msg.message, msg, type });
       Sentry.captureException(
         new Error("Novo Tipo de Mensagem em getTypeMessage")
       );
     }
-
     return types[type];
   } catch (error) {
     Sentry.setExtra("Error getTypeMessage", { msg, BodyMsg: msg.message });
@@ -418,11 +391,17 @@ export const getQuotedMessageId = (msg: proto.IWebMessageInfo) => {
   return body?.contextInfo?.stanzaId;
 };
 
-export const getMeSocket = (wbot: Session): IMe => {
-  return {
-    id: jidNormalizedUser((wbot as WASocket).user.id),
-    name: (wbot as WASocket).user.name
-  };
+const getMeSocket = (wbot: Session): IMe => {
+
+  return wbot.type === "legacy"
+    ? {
+      id: jidNormalizedUser((wbot as WALegacySocket).state.legacy.user.id),
+      name: (wbot as WALegacySocket).state.legacy.user.name
+    }
+    : {
+      id: jidNormalizedUser((wbot as WASocket).user.id),
+      name: (wbot as WASocket).user.name
+    };
 };
 
 const getSenderMessage = (
@@ -438,23 +417,26 @@ const getSenderMessage = (
 };
 
 const getContactMessage = async (msg: proto.IWebMessageInfo, wbot: Session) => {
+  if (wbot.type === "legacy") {
+    return wbot.store.contacts[msg.key.participant || msg.key.remoteJid] as IMe;
+  }
+
   const isGroup = msg.key.remoteJid.includes("g.us");
   const rawNumber = msg.key.remoteJid.replace(/\D/g, "");
-
   return isGroup
     ? {
-        id: getSenderMessage(msg, wbot),
-        name: msg.pushName
-      }
+      id: getSenderMessage(msg, wbot),
+      name: msg.pushName
+    }
     : {
-        id: msg.key.remoteJid,
-        name: msg.key.fromMe ? rawNumber : msg.pushName
-      };
+      id: msg.key.remoteJid,
+      name: msg.key.fromMe ? rawNumber : msg.pushName
+    };
 };
 
 const downloadMedia = async (msg: proto.IWebMessageInfo) => {
   const mineType =
-
+    
     msg.message?.imageMessage ||
     msg.message?.audioMessage ||
     msg.message?.videoMessage ||
@@ -463,7 +445,7 @@ const downloadMedia = async (msg: proto.IWebMessageInfo) => {
     msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
 
   const messageType = msg.message?.documentMessage
-
+    
     ? "document"
     : mineType.mimetype.split("/")[0].replace("application", "document")
       ? (mineType.mimetype
@@ -501,7 +483,7 @@ const downloadMedia = async (msg: proto.IWebMessageInfo) => {
     }
   }
 
-
+  
   let buffer = Buffer.from([]);
   // eslint-disable-next-line no-restricted-syntax
   try {
@@ -537,7 +519,6 @@ const verifyContact = async (
   wbot: Session,
   companyId: number
 ): Promise<Contact> => {
-  
   let profilePicUrl: string;
   try {
     profilePicUrl = await wbot.profilePictureUrl(msgContact.id);
@@ -555,7 +536,8 @@ const verifyContact = async (
   };
 
 
-  const contact = CreateOrUpdateContactService(contactData); 
+
+  const contact = CreateOrUpdateContactService(contactData);
 
   return contact;
 };
@@ -666,7 +648,6 @@ export const verifyMessage = async (
   ticket: Ticket,
   contact: Contact
 ) => {
-  
   const io = getIO();
   const quotedMsg = await verifyQuotedMessage(msg);
   const body = getBodyMessage(msg);
@@ -685,13 +666,12 @@ export const verifyMessage = async (
     participant: msg.key.participant,
     dataJson: JSON.stringify(msg)
   };
-  
+
   await ticket.update({
     lastMessage: body
   });
 
   await CreateMessageService({ messageData, companyId: ticket.companyId });
-
 
   if (!msg.key.fromMe && ticket.status === "closed") {
     await ticket.update({ status: "pending" });
@@ -750,7 +730,7 @@ const isValidMsg = (msg: proto.IWebMessageInfo): boolean => {
       msgType === "listResponseMessage" ||
       msgType === "listMessage" ||
       msgType === "viewOnceMessage";
-
+      
     if (!ifType) {
       logger.warn(`#### Nao achou o type em isValidMsg: ${msgType}
 ${JSON.stringify(msg?.message)}`);
@@ -883,7 +863,6 @@ const verifyQueue = async (
   };
 
   if (choosenQueue) {
-
     let chatbot = false;
     if (choosenQueue?.options) {
       chatbot = choosenQueue.options.length > 0;
@@ -1036,12 +1015,8 @@ const handleRating = async (
 
 };
 
-const handleChartbot = async (
-  ticket: Ticket,
-  msg: WAMessage,
-  wbot: Session,
-  dontReadTheFirstQuestion: boolean = false
-) => {
+const handleChartbot = async (ticket: Ticket, msg: WAMessage, wbot: Session, dontReadTheFirstQuestion: boolean = false) => {
+
   const queue = await Queue.findByPk(ticket.queueId, {
     include: [
       {
@@ -1050,11 +1025,49 @@ const handleChartbot = async (
         where: { parentId: null },
         order: [
           ["option", "ASC"],
-          ["createdAt", "ASC"]
-        ]
-      }
-    ]
+          ["createdAt", "ASC"],
+        ],
+      },
+    ],
   });
+ /* if (ticket.queue !== null) {
+    const queue = await Queue.findByPk(ticket.queueId);
+    const { schedules }: any = queue;
+    const now = moment();
+    const weekday = now.format("dddd").toLowerCase();
+    let schedule;
+
+    if (Array.isArray(schedules) && schedules.length > 0) {
+      schedule = schedules.find((s) => s.weekdayEn === weekday && s.startTime !== "" && s.startTime !== null && s.endTime !== "" && s.endTime !== null);
+    }
+
+    if (ticket.queue.outOfHoursMessage !== null && ticket.queue.outOfHoursMessage !== "" && !isNil(schedule)) {
+  const now = moment();
+  const startTime = moment(schedule.startTime, "HH:mm");
+  const endTime = moment(schedule.endTime, "HH:mm");
+
+  if (now.isBefore(startTime) || now.isAfter(endTime)) {
+    const body = formatBody(`${ticket.queue.outOfHoursMessage}\n\n*[ # ]* - Voltar ao Menu Principal`, ticket.contact);
+    const sentMessage = await wbot.sendMessage(
+      `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`, {
+        text: body,
+      }
+    );
+    await verifyMessage(sentMessage, ticket, ticket.contact);
+    return;
+  }
+
+  const body = formatBody(`\u200e${ticket.queue.greetingMessage}`, ticket.contact);
+  const sentMessage = await wbot.sendMessage(
+    `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`, {
+      text: body,
+    }
+  );
+  await verifyMessage(sentMessage, ticket, ticket.contact);
+}
+
+  } */
+
 
   const messageBody = getBodyMessage(msg);
 
@@ -1065,239 +1078,75 @@ const handleChartbot = async (
     return;
   }
 
-  const companyId = ticket.companyId;
+  // voltar para o menu anterior
+  if (!isNil(queue) && !isNil(ticket.queueOptionId) && messageBody == "#") {
+    const option = await QueueOption.findByPk(ticket.queueOptionId);
+    await ticket.update({ queueOptionId: option?.parentId });
 
-  const buttonActive = await Setting.findOne({
-    where: {
-      key: "chatBotType",
-      companyId
-    }
-  });
-
-  const botText = async () => {
-    if (!isNil(queue) && !isNil(ticket.queueOptionId) && messageBody == "#") {
-      // falar com atendente
-      await ticket.update({ queueOptionId: null, chatbot: false });
-      const sentMessage = await wbot.sendMessage(
-        `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
-        {
-          text: "\u200eAguarde, você será atendido em instantes."
-        }
-      );
-  
-      verifyMessage(sentMessage, ticket, ticket.contact);
-      return;
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId) && messageBody == "0") {
-      // voltar para o menu anterior
-      const option = await QueueOption.findByPk(ticket.queueOptionId);
-      await ticket.update({ queueOptionId: option?.parentId });
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
-      // escolheu uma opção
-      const count = await QueueOption.count({
-        where: { parentId: ticket.queueOptionId }
-      });
-      let option: any = {};
-      if (count == 1) {
-        option = await QueueOption.findOne({
-          where: { parentId: ticket.queueOptionId }
-        });
-      } else {
-        option = await QueueOption.findOne({
-          where: {
-            option: messageBody || "",
-            parentId: ticket.queueOptionId
-          }
-        });
-      }
-      if (option) {
-        await ticket.update({ queueOptionId: option?.id });
-      }
-    } else if (!isNil(queue) && isNil(ticket.queueOptionId) && !dontReadTheFirstQuestion ) {
-      // não linha a primeira pergunta
-      const option = queue?.options.find(o => o.option == messageBody);
-      if (option) {
-        await ticket.update({ queueOptionId: option?.id });
-      }
-    }
-  
-    await ticket.reload();
-
-    if (!isNil(queue) && isNil(ticket.queueOptionId)) {
-      let body = "";
-      let options = "";
-      const queueOptions = await QueueOption.findAll({
-        where: { queueId: ticket.queueId, parentId: null },
-        order: [
-          ["option", "ASC"],
-          ["createdAt", "ASC"]
-        ]
-      });
-  
-      if (queue.greetingMessage) {
-        body = `${queue.greetingMessage}\n\n`;
-      }
-  
-      queueOptions.forEach((option, i) => {
-        if (queueOptions.length - 1 > i) {
-          options += `*[ ${option.option} ]* - ${option.title}\n`;
-        } else {
-          options += `*[ ${option.option} ]* - ${option.title}`;
-        }
-      });
-  
-      if (options !== "") {
-        body += options;
-      }
-  
-      body += "\n\n*[ # ]* - *Menu Inicial*";
-  
-      const textMessage = {
-        text: formatBody(`\u200e${body}`, ticket.contact),
-      };
-      const sendMsg = await wbot.sendMessage(`${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,textMessage
-      );
-  
-      await verifyMessage(sendMsg, ticket, ticket.contact);
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
-      const currentOption = await QueueOption.findByPk(ticket.queueOptionId);
-      const queueOptions = await QueueOption.findAll({
+    // escolheu uma opção
+  } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
+    const count = await QueueOption.count({
+      where: { parentId: ticket.queueOptionId },
+    });
+    let option: any = {};
+    if (count == 1) {
+      option = await QueueOption.findOne({
         where: { parentId: ticket.queueOptionId },
-        order: [
-          ["option", "ASC"],
-          ["createdAt", "ASC"]
-        ]
       });
-      let body = "";
-      let options = "";
-      let initialMessage = "";
-      let aditionalOptions = "\n";
-  
-      if (queueOptions.length > 1) {
-        if (!isNil(currentOption?.message) && currentOption?.message !== "") {
-          initialMessage = `${currentOption?.message}\n\n`;
-          body += initialMessage;
-        }
-  
-        if (queueOptions.length == 0) {
-          aditionalOptions = `*#* - *Falar com o atendente*\n`;
-        }
-  
-        queueOptions.forEach(option => {
-          options += `*[ ${option.option} ]* - ${option.title}\n`;
-        });
-  
-        if (options !== "") {
-          body += options;
-        }
-  
-        aditionalOptions += "*[ 0 ]* - *Voltar*\n";
-        aditionalOptions += "*[ # ]* - *Menu inicial*";
-  
-        body += aditionalOptions;
-      } else {
-        const firstOption = head(queueOptions);
-        if (firstOption) {
-          body = `${firstOption?.title}`;
-          if (firstOption?.message) {
-            body += `\n\n${firstOption.message}`;
-          }
-        } else {
-
-          body += `*[ 0 ]* - *Voltar*\n`;
-          body += `*[ # ]* - *Menu inicial*`;
-        }
-      }
-  
-      const textMessage = {
-        text: formatBody(`\u200e${body}`, ticket.contact),
-      };
-      
-      const sendMsg = await wbot.sendMessage(
-        `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
-        textMessage
-      );
-      
-      await verifyMessage(sendMsg, ticket, ticket.contact);
-    }   
-
-  };
-
-  const botList = async () => {
-    if (!isNil(queue) && !isNil(ticket.queueOptionId) && messageBody == "#") {
-      // falar com atendente
-      await ticket.update({ queueOptionId: null, chatbot: false });
-      const sentMessage = await wbot.sendMessage(
-        `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
-        {
-          text: "\u200eAguarde, você será atendido em instantes."
-        }
-      );
-  
-      verifyMessage(sentMessage, ticket, ticket.contact);
-      return;
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId) && messageBody == "0") {
-      // voltar para o menu anterior
-      const option = await QueueOption.findByPk(ticket.queueOptionId);
-      await ticket.update({ queueOptionId: option?.parentId });
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
-      // escolheu uma opção
-      const count = await QueueOption.count({
-        where: { parentId: ticket.queueOptionId }
+    } else {
+      option = await QueueOption.findOne({
+        where: {
+          option: messageBody || "",
+          parentId: ticket.queueOptionId,
+        },
       });
-      let option: any = {};
-      if (count == 1) {
-        option = await QueueOption.findOne({
-          where: { parentId: ticket.queueOptionId }
-        });
-      } else {
-        option = await QueueOption.findOne({
-          where: {
-            option: messageBody || "",
-            parentId: ticket.queueOptionId
-          }
-        });
-      }
-      if (option) {
-        await ticket.update({ queueOptionId: option?.id });
-      }
-    } else if (!isNil(queue) && isNil(ticket.queueOptionId) && !dontReadTheFirstQuestion ) {
-      // não linha a primeira pergunta
-      const option = queue?.options.find(o => o.option == messageBody);
-      if (option) {
-        await ticket.update({ queueOptionId: option?.id });
-      }
     }
-  
-    await ticket.reload();
+    if (option) {
+      await ticket.update({ queueOptionId: option?.id });
+    }
 
-    if (!isNil(queue) && isNil(ticket.queueOptionId)) {
-      const sectionsRows = [];
-      let body = "";
-      let options = "";
-      const queueOptions = await QueueOption.findAll({
-        where: { queueId: ticket.queueId, parentId: null },
-        order: [
-          ["option", "ASC"],
-          ["createdAt", "ASC"]
-        ]
-      });
-  
-      if (queue.greetingMessage) {
-        body = `${queue.greetingMessage}\n\n`;
+    // não linha a primeira pergunta
+  } else if (!isNil(queue) && isNil(ticket.queueOptionId) && !dontReadTheFirstQuestion) {
+    const option = queue?.options.find((o) => o.option == messageBody);
+    if (option) {
+      await ticket.update({ queueOptionId: option?.id });
+    }
+  }
+
+  await ticket.reload();
+
+  if (!isNil(queue) && isNil(ticket.queueOptionId)) {
+
+    const queueOptions = await QueueOption.findAll({
+      where: { queueId: ticket.queueId, parentId: null },
+      order: [
+        ["option", "ASC"],
+        ["createdAt", "ASC"],
+      ],
+    });
+
+    const companyId = ticket.companyId;
+
+    const buttonActive = await Setting.findOne({
+      where: {
+        key: "chatBotType",
+        companyId
       }
-  
+    });
+
+    const botList = async () => {
+      const sectionsRows = [];
+
       queueOptions.forEach((option, i) => {
         sectionsRows.push({
           title: option.title,
           rowId: `${option.option}`
         });
       });
-  
       sectionsRows.push({
         title: "Voltar Menu Inicial",
         rowId: `#`
       });
-  
       const sections = [
         {
           rows: sectionsRows
@@ -1316,164 +1165,10 @@ const handleChartbot = async (
       );
 
       await verifyMessage(sendMsg, ticket, ticket.contact);
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
-      const currentOption = await QueueOption.findByPk(ticket.queueOptionId);
-      const queueOptions = await QueueOption.findAll({
-        where: { parentId: ticket.queueOptionId },
-        order: [
-          ["option", "ASC"],
-          ["createdAt", "ASC"]
-        ]
-      });
-      let sectionsRows = [];
-      let body = "";
-      let initialMessage = "";
-  
-      if (queueOptions.length > 1) {
-        if (!isNil(currentOption?.message) && currentOption?.message !== "") {
-          initialMessage = `${currentOption?.message}`;
-          body += initialMessage;
-        }
-  
-        if (queueOptions.length == 0) {
-          sectionsRows.push({
-            title: "Voltar Menu Inicial",
-            rowId: `#`
-          });
-        }
-  
-        queueOptions.forEach(option => {
-          sectionsRows.push({
-            title: option.title,
-            rowId: `${option.option}`
-          });
-        });
-  
-        /* if (options !== "") {
-          body += options;
-        } */
-  
-        sectionsRows.push({
-          title: "Voltar",
-          rowId: `0`
-        });
-        sectionsRows.push({
-          title: "Menu Inicial",
-          rowId: `#`
-        });
-
-  
-        //body += aditionalOptions;
-      } else {
-        const firstOption = head(queueOptions);
-        if (firstOption) {
-          body = `${firstOption?.title}`;
-          if (firstOption?.message) {
-            body += `\n\n${firstOption.message}`;
-          }
-          sectionsRows.push({
-            title: "Voltar",
-            rowId: `0`
-          });
-          sectionsRows.push({
-            title: "Menu Inicial",
-            rowId: `#`
-          });
-        } else {
-          sectionsRows.push({
-            title: "Voltar",
-            rowId: `0`
-          });
-          sectionsRows.push({
-            title: "Menu Inicial",
-            rowId: `#`
-          });
-        }
-      }
-      const sections = [
-        {
-          rows: sectionsRows
-        }
-      ];
-      const listMessage = {
-        text: formatBody(`\u200e${body}`, ticket.contact),
-        buttonText: "Escolha uma opção",
-        sections
-      };
-
-      const sendMsg = await wbot.sendMessage(
-        `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
-        listMessage
-      );
-
-      await verifyMessage(sendMsg, ticket, ticket.contact);
-    }   
-  };
-
-  const botButton = async () => {
-    if (!isNil(queue) && !isNil(ticket.queueOptionId) && messageBody == "#") {
-      // falar com atendente
-      await ticket.update({ queueOptionId: null, chatbot: false });
-      const sentMessage = await wbot.sendMessage(
-        `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
-        {
-          text: "\u200eAguarde, você será atendido em instantes."
-        }
-      );
-  
-      verifyMessage(sentMessage, ticket, ticket.contact);
-      return;
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId) && messageBody == "0") {
-      // voltar para o menu anterior
-      const option = await QueueOption.findByPk(ticket.queueOptionId);
-      await ticket.update({ queueOptionId: option?.parentId });
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
-      // escolheu uma opção
-      const count = await QueueOption.count({
-        where: { parentId: ticket.queueOptionId }
-      });
-      let option: any = {};
-      if (count == 1) {
-        option = await QueueOption.findOne({
-          where: { parentId: ticket.queueOptionId }
-        });
-      } else {
-        option = await QueueOption.findOne({
-          where: {
-            option: messageBody || "",
-            parentId: ticket.queueOptionId
-          }
-        });
-      }
-      if (option) {
-        await ticket.update({ queueOptionId: option?.id });
-      }
-    } else if (!isNil(queue) && isNil(ticket.queueOptionId) && !dontReadTheFirstQuestion ) {
-      // não linha a primeira pergunta
-      const option = queue?.options.find(o => o.option == messageBody);
-      if (option) {
-        await ticket.update({ queueOptionId: option?.id });
-      }
     }
-  
-    await ticket.reload();
 
-    if (!isNil(queue) && isNil(ticket.queueOptionId)) {
+    const botButton = async () => {
       const buttons = [];
-      let body = "";
-      let options = "";
-      const queueOptions = await QueueOption.findAll({
-        where: { queueId: ticket.queueId, parentId: null },
-        order: [
-          ["option", "ASC"],
-          ["createdAt", "ASC"]
-        ]
-      });
-  
-      if (queue.greetingMessage) {
-        body = `${queue.greetingMessage}\n\n`;
-      }
-  
       queueOptions.forEach((option, i) => {
         buttons.push({
           buttonId: `${option.option}`,
@@ -1481,7 +1176,6 @@ const handleChartbot = async (
           type: 4
         });
       });
-  
       buttons.push({
         buttonId: `#`,
         buttonText: { displayText: "Voltar Menu Inicial" },
@@ -1500,50 +1194,119 @@ const handleChartbot = async (
       );
 
       await verifyMessage(sendMsg, ticket, ticket.contact);
-    } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
-      const currentOption = await QueueOption.findByPk(ticket.queueOptionId);
-      const queueOptions = await QueueOption.findAll({
-        where: { parentId: ticket.queueOptionId },
-        order: [
-          ["option", "ASC"],
-          ["createdAt", "ASC"]
-        ]
+    }
+
+    const botText = async () => {
+      let options = "";
+
+      queueOptions.forEach((option, i) => {
+        options += `*[ ${option.option} ]* - ${option.title}\n`;
       });
-      const buttons = [];
-      let sectionsRows = [];
-      let body = "";
-      let initialMessage = "";
-  
-      if (queueOptions.length > 1) {
-        if (!isNil(currentOption?.message) && currentOption?.message !== "") {
-          initialMessage = `${currentOption?.message}`;
-          body += initialMessage;
+      options += `\n*[ # ]* - Voltar Menu Inicial`;
+
+      const textMessage = {
+        text: formatBody(`\u200e${queue.greetingMessage}\n\n${options}`, ticket.contact),
+      };
+
+      const sendMsg = await wbot.sendMessage(
+        `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
+        textMessage
+      );
+
+      await verifyMessage(sendMsg, ticket, ticket.contact);
+    };
+
+    if (buttonActive.value === "list") {
+      return botList();
+    };
+
+    if (buttonActive.value === "button" && QueueOption.length <= 4) {
+      return botButton();
+    }
+
+    if (buttonActive.value === "text") {
+      return botText();
+    }
+
+    if (buttonActive.value === "button" && QueueOption.length > 4) {
+      return botText();
+    }
+  } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
+    const currentOption = await QueueOption.findByPk(ticket.queueOptionId);
+    const queueOptions = await QueueOption.findAll({
+      where: { parentId: ticket.queueOptionId },
+      order: [
+        ["option", "ASC"],
+        ["createdAt", "ASC"],
+      ],
+    });
+
+    if (!queueOptions.length) {
+      const body = formatBody(
+        `\u200e${currentOption.message}`+`\n\n*[ # ]* - Voltar Menu Inicial`,
+        ticket.contact        
+      );
+      
+      const sentMessage = await wbot.sendMessage(
+        `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
+        {
+          
+          text: body
         }
-  
-        if (queueOptions.length == 0) {
-          buttons.push({
-            buttonId: `#`,
-            buttonText: { displayText: "Voltar Menu Inicial" },
-            type: 4
+      );
+
+      await verifyMessage(sentMessage, ticket, ticket.contact);  
+    }
+    else {    
+      const companyId = ticket.companyId;
+      const buttonActive = await Setting.findOne({
+        where: {
+          key: "chatBotType",
+          companyId
+        }
+      });
+
+      const botList = async () => {
+        const sectionsRows = [];
+
+        queueOptions.forEach((option, i) => {
+          sectionsRows.push({
+            title: option.title,
+            rowId: `${option.option}`
           });
-        }
-  
-        queueOptions.forEach(option => {
+        });
+        sectionsRows.push({
+          title: "Voltar Menu Inicial",
+          rowId: `#`
+        });
+        const sections = [
+          {
+            rows: sectionsRows
+          }
+        ];
+
+        const listMessage = {
+          text: formatBody(`\u200e${currentOption.message}`, ticket.contact),
+          buttonText: "Escolha uma opção",
+          sections
+        };
+
+        const sendMsg = await wbot.sendMessage(
+          `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
+          listMessage
+        );
+
+        await verifyMessage(sendMsg, ticket, ticket.contact);
+      }
+
+      const botButton = async () => {
+        const buttons = [];
+        queueOptions.forEach((option, i) => {
           buttons.push({
             buttonId: `${option.option}`,
             buttonText: { displayText: option.title },
             type: 4
           });
-        });
-  
-        /* if (options !== "") {
-          body += options;
-        } */
-  
-        buttons.push({
-          buttonId: `0`,
-          buttonText: { displayText: "Voltar" },
-          type: 4
         });
         buttons.push({
           buttonId: `#`,
@@ -1551,210 +1314,66 @@ const handleChartbot = async (
           type: 4
         });
 
-  
-        //body += aditionalOptions;
-      } else {
-        const firstOption = head(queueOptions);
-        if (firstOption) {
-          body = `${firstOption?.title}`;
-          if (firstOption?.message) {
-            body += `\n\n${firstOption.message}`;
-          }
-          buttons.push({
-            buttonId: `0`,
-            buttonText: { displayText: "Voltar" },
-            type: 4
-          });
-          buttons.push({
-            buttonId: `#`,
-            buttonText: { displayText: "Voltar Menu Inicial" },
-            type: 4
-          });
-        } else {
-          buttons.push({
-            buttonId: `0`,
-            buttonText: { displayText: "Voltar" },
-            type: 4
-          });
-          buttons.push({
-            buttonId: `#`,
-            buttonText: { displayText: "Voltar Menu Inicial" },
-            type: 4
-          });
-        }
+        const buttonMessage = {
+          text: formatBody(`\u200e${currentOption.message}`, ticket.contact),
+          buttons,
+          headerType: 4
+        };
+
+        const sendMsg = await wbot.sendMessage(
+          `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
+          buttonMessage
+        );
+
+        await verifyMessage(sendMsg, ticket, ticket.contact);
       }
-      const sections = [
-        {
-          rows: sectionsRows
-        }
-      ];
-      const buttonMessage = {
-        text: formatBody(`\u200e${body}`, ticket.contact),
-        buttons,
-        headerType: 4
+
+      const botText = async () => {
+
+        let options = "";
+        options += ` *Escolha* *uma* *opção*:\n\n`;
+
+        queueOptions.forEach((option, i) => {
+          options += `*[ ${option.option} ]* - ${option.title}\n`;
+        });
+        options += `\n*[ # ]* - Voltar Menu Inicial`;
+
+        const textMessage = {
+          text: formatBody(`\u200e${currentOption.message}${options}`, ticket.contact),
+        };
+
+        const sendMsg = await wbot.sendMessage(
+          `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
+          textMessage
+        );
+
+        await verifyMessage(sendMsg, ticket, ticket.contact);
       };
 
-      const sendMsg = await wbot.sendMessage(
-        `${ticket.contact.number}@${ticket.isGroup ? "g.us" : "s.whatsapp.net"}`,
-        buttonMessage
-      );
+      if (buttonActive.value === "list") {
+        return botList();
+      };
 
-      await verifyMessage(sendMsg, ticket, ticket.contact);
-    }   
-  };
-
-
-  if (buttonActive.value === "list") {
-    return botList();
-  };
-
-  if (buttonActive.value === "button" && QueueOption.length <= 4) {
-    return botButton();
-  }
-
-  if (buttonActive.value === "text") {
-    return botText();
-  }
-
-  if (buttonActive.value === "button" && QueueOption.length > 4) {
-    return botText();
-  }
-
-  if (!isNil(queue) && isNil(ticket.queueOptionId)) {
-    let body = "";
-    let options = "";
-    const queueOptions = await QueueOption.findAll({
-      where: { queueId: ticket.queueId, parentId: null },
-      order: [
-        ["option", "ASC"],
-        ["createdAt", "ASC"]
-      ]
-    });
-
-    if (queue.greetingMessage) {
-      body = `${queue.greetingMessage}\n\n`;
-    }
-
-    queueOptions.forEach((option, i) => {
-      if (queueOptions.length - 1 > i) {
-        options += `*${option.option}* - ${option.title}\n`;
-      } else {
-        options += `*${option.option}* - ${option.title}`;
-      }
-    });
-
-    if (options !== "") {
-      body += options;
-    }
-
-    body += "\n\n*#* - *Menu inicial*";
-
-    const debouncedSentMessage = debounce(
-      async () => {
-        const sentMessage = await wbot.sendMessage(
-          `${ticket.contact.number}@${
-            ticket.isGroup ? "g.us" : "s.whatsapp.net"
-          }`,
-          {
-            text: body
-          }
-        );
-        verifyMessage(sentMessage, ticket, ticket.contact);
-      },
-      3000,
-      ticket.id
-    );
-
-    debouncedSentMessage();
-  } else if (!isNil(queue) && !isNil(ticket.queueOptionId)) {
-    const currentOption = await QueueOption.findByPk(ticket.queueOptionId);
-    const queueOptions = await QueueOption.findAll({
-      where: { parentId: ticket.queueOptionId },
-      order: [
-        ["option", "ASC"],
-        ["createdAt", "ASC"]
-      ]
-    });
-    let body = "";
-    let options = "";
-    let initialMessage = "";
-    let aditionalOptions = "\n";
-
-    if (queueOptions.length > 1) {
-      if (!isNil(currentOption?.message) && currentOption?.message !== "") {
-        initialMessage = `${currentOption?.message}\n\n`;
-        body += initialMessage;
+      if (buttonActive.value === "button" && QueueOption.length <= 4) {
+        return botButton();
       }
 
-      if (queueOptions.length == 0) {
-        aditionalOptions = `*#* - *Falar com o atendente*\n`;
+      if (buttonActive.value === "text") {
+        return botText();
       }
 
-      queueOptions.forEach(option => {
-        options += `*${option.option}* - ${option.title}\n`;
-      });
-
-      if (options !== "") {
-        body += options;
-      }
-
-      aditionalOptions += "*0* - *Voltar*\n";
-      aditionalOptions += "*#* - *Menu inicial*";
-
-      body += aditionalOptions;
-    } else {
-      const firstOption = head(queueOptions);
-      if (firstOption) {
-        body = `${firstOption?.title}`;
-        if (firstOption?.message) {
-          body += `\n\n${firstOption.message}`;
-        }
-      } else {
-        body = `*#* - *Falar com o atendente*\n\n`;
-        body += `*0* - *Voltar*\n`;
-        body += `*#* - *Menu inicial*`;
+      if (buttonActive.value === "button" && QueueOption.length > 4) {
+        return botText();
       }
     }
-
-    const debouncedSentMessage = debounce(
-      async () => {
-        const sentMessage = await wbot.sendMessage(
-          `${ticket.contact.number}@${
-            ticket.isGroup ? "g.us" : "s.whatsapp.net"
-          }`,
-          {
-            text: body
-          }
-        );
-        verifyMessage(sentMessage, ticket, ticket.contact);
-      },
-      3000,
-      ticket.id
-    );
-
-    debouncedSentMessage();
   }
-};
-
-const getChat = async (whatsapp: Whatsapp, msg: proto.IWebMessageInfo) => {
-  try {
-    const countMessageUnread = await ShowBaileysChatService(
-      whatsapp.id!,
-      msg.key.remoteJid
-    );
-
-    return countMessageUnread.unreadCount;
-  } catch (error) {
-    return 0;
-  }
-};
+}
 
 const handleMessage = async (
   msg: proto.IWebMessageInfo,
   wbot: Session,
   companyId: number
 ): Promise<void> => {
-
   if (!isValidMsg(msg)) return;
   try {
     let msgContact: IMe;
@@ -1796,7 +1415,7 @@ const handleMessage = async (
     if (msgIsGroupBlock?.value === "enabled" && isGroup) return;
 
     if (isGroup) {
-      const grupoMeta = await wbot.groupMetadata(msg.key.remoteJid);
+      const grupoMeta = await wbot.groupMetadata(msg.key.remoteJid, false);
       const msgGroupContact = {
         id: grupoMeta.id,
         name: grupoMeta.subject
@@ -1805,14 +1424,17 @@ const handleMessage = async (
     }
 
     const whatsapp = await ShowWhatsAppService(wbot.id!, companyId);
-    const countMessageUnread = await getChat(whatsapp, msg);
-    const unreadMessages = msg.key.fromMe ? 0 : countMessageUnread;
+    const count = wbot.store.chats.get(msg.key.remoteJid || msg.key.participant);
+    const unreadMessages = msg.key.fromMe ? 1 :  0;
+	/* count?.unreadCount || */
     const contact = await verifyContact(msgContact, wbot, companyId);
 
-    if (unreadMessages === 0 && whatsapp.farewellMessage && formatBody(whatsapp.farewellMessage, contact) === bodyMessage)
+    if (unreadMessages === 0 && whatsapp.farewellMessage && formatBody(whatsapp.farewellMessage, contact) === bodyMessage) {
       return;
-
-    const ticket = await FindOrCreateTicketService(contact, whatsapp.id!, unreadMessages, companyId, groupContact,);
+    }
+/////solucação do erro, erro a baixo
+ /*const ticket = await FindOrCreateTicketService(contact, whatsapp.id, unreadMessages, companyId, groupContact,);*/
+    const ticket = await FindOrCreateTicketService(contact, wbot.id!, unreadMessages, companyId, groupContact,);
 
 
     /////INTEGRAÇÕES
@@ -2479,8 +2101,9 @@ const handleMessage = async (
                 }
               };
 
-              let teste = axios.request(options).then(async function (response) {
+              axios.request(options).then(async function (response) {
                 if (response.data.type === 'error') {
+                  console.log("Error response", response.data.message);
                   const body = {
                     text: formatBody(`*Opss!!!!*\nOcorreu um erro! Digite *#* e fale com um *Atendente*!`, contact),
                   };
@@ -2971,7 +2594,6 @@ const handleMessage = async (
                 }
 
               }).catch(async function (error) {
-                logger.error(error.reason);
                 const body = {
                   text: formatBody(`*Opss!!!!*\nOcorreu um erro! Digite *#* e fale com um *Atendente*!`, contact),
                 };
@@ -3539,19 +3161,8 @@ const wbotMessageListener = async (wbot: Session, companyId: number): Promise<vo
       });
     });
 
-    wbot.ev.on("messages.update", (messageUpdate: WAMessageUpdate[]) => {
-      if (messageUpdate.length === 0) return;
-      messageUpdate.forEach(async (message: WAMessageUpdate) => {
-        handleMsgAck(message, message.update.status);
-      });
-    });
-
-    wbot.ev.on("chats.update", async (chatUpdate: Partial<Chat>[]) => {
-      if (chatUpdate.length === 0) return;
-
-      chatUpdate.forEach(async (chat: Partial<Chat>) => {
-        await CreateOrUpdateBaileysChatService(wbot.id, chat);
-      });
+    wbot.ev.on("messages.set", async (messageSet: IMessage) => {
+      messageSet.messages.filter(filterMessages).map(msg => msg);
     });
   } catch (error) {
     Sentry.captureException(error);

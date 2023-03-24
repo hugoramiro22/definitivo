@@ -42,7 +42,7 @@ const CreateTicketService = async ({
   });
 
   await Ticket.update(
-    { companyId, queueId, userId, whatsappId: defaultWhatsapp.id, status: "open" },
+    { companyId, queueId, userId, status: "open" },
     { where: { id } }
   );
 

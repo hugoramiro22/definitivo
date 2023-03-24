@@ -40,7 +40,6 @@ const UpdateTicketService = async ({
   ticketId,
   companyId
 }: Request): Promise<Response> => {
-
   try {
     const { status } = ticketData;
     let { queueId, userId } = ticketData;
@@ -111,15 +110,15 @@ const UpdateTicketService = async ({
         const body = `\u200e${complationMessage}`;
         await SendWhatsAppMessage({ body, ticket });
       }
-      
+
       ticketTraking.finishedAt = moment().toDate();
       ticketTraking.whatsappId = ticket.whatsappId;
       ticketTraking.userId = ticket.userId;
-      
-/*    queueId = null;
-      userId = null; */
+
+      queueId = null;
+      userId = null;
     }
-    
+
     if (queueId !== undefined && queueId !== null) {
       ticketTraking.queuedAt = moment().toDate();
     }

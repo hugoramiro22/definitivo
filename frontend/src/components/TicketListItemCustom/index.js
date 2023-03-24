@@ -246,21 +246,23 @@ const TicketListItemCustom = ({ ticket }) => {
                 position: "inherit",
                 borderRadius: 2,
                 color: "white",
+                marginTop: 10,
+                marginRight: 10,
                 top: -6
               }}
               badgeContent={ticket.queue?.name || "Sem fila"}
             //color="primary"
             />
           )}
-          {ticket.status === "open" && (
+          {ticket.status === "open"  && profile === "admin" && (
             <Tooltip title="Fechar Conversa">
               <ClearOutlinedIcon
                 onClick={() => handleCloseTicket(ticket.id)}
                 fontSize="small"
                 style={{
                   color: red[700],
-                  cursor: "pointer",
-                  marginRight: 5,
+                  verticalAlign: "middle",
+                  cursor: "pointer",                 
                 }}
               />
             </Tooltip>
@@ -273,6 +275,7 @@ const TicketListItemCustom = ({ ticket }) => {
                 style={{
                   color: blue[700],
                   cursor: "pointer",
+                  verticalAlign: "middle",
                   marginRight: 5,
                 }}
               />
@@ -303,21 +306,23 @@ const TicketListItemCustom = ({ ticket }) => {
                 position: "inherit",
                 borderRadius: 2,
                 color: "white",
+                marginTop: 10,
+                marginRight: 10,
                 top: -6
               }}
               badgeContent={ticket.queue?.name || "Sem fila"}
             //color=
             />
           )}
-          {ticket.status === "pending" && (
+          {ticket.status === "pending"  && profile === "admin" && (
             <Tooltip title="Fechar Conversa">
               <ClearOutlinedIcon
                 onClick={() => handleCloseTicket(ticket.id)}
                 fontSize="small"
                 style={{
                   color: red[700],
+                  verticalAlign: "middle",
                   cursor: "pointer",
-                  marginRight: 5,
                 }}
               />
             </Tooltip>
@@ -330,15 +335,15 @@ const TicketListItemCustom = ({ ticket }) => {
               />
             </Tooltip>
           )}
-          {ticket.status === "open" && (
+          {ticket.status === "open" && profile === "admin" && (
             <Tooltip title="Fechar Conversa">
               <ClearOutlinedIcon
                 onClick={() => handleCloseTicket(ticket.id)}
                 fontSize="small"
                 style={{
                   color: red[700],
+                  verticalAlign: "middle",
                   cursor: "pointer",
-                  marginRight: 5,
                 }}
               />
             </Tooltip>
@@ -351,12 +356,24 @@ const TicketListItemCustom = ({ ticket }) => {
                 style={{
                   color: blue[700],
                   cursor: "pointer",
+                  verticalAlign: "middle",
                   marginRight: 5,
                 }}
               />
             </Tooltip>
           )}
           {ticket.status === "pending" && (
+
+<ButtonWithSpinner
+loading={loading}
+size="small"
+variant="contained"
+color="primary"
+onClick={e => handleAcepptTicket(ticket.id)}
+>
+{i18n.t("messagesList.header.buttons.accept")}
+</ButtonWithSpinner>
+/*
             <Tooltip title="Aceitar Conversa">
               <DoneIcon
                 onClick={() => handleAcepptTicket(ticket.id)}
@@ -367,7 +384,7 @@ const TicketListItemCustom = ({ ticket }) => {
                   marginRight: 5,
                 }}
               />
-            </Tooltip>
+            </Tooltip>*/
           )}
         </>
       );
@@ -431,8 +448,9 @@ const TicketListItemCustom = ({ ticket }) => {
                 component="span"
                 variant="body2"
                 color="textSecondary"
-              > {ticket.lastMessage.includes('data:image/png;base64') ? <MarkdownWrapper> Localização</MarkdownWrapper> : <MarkdownWrapper>{ticket.lastMessage}</MarkdownWrapper>}
-                {ticket.lastMessage === "" ? <br /> : <MarkdownWrapper>{ticket.lastMessage}</MarkdownWrapper>}
+              > {ticket.lastMessage && ticket.lastMessage.includes('data:image/png;base64') ? <MarkdownWrapper> Localização</MarkdownWrapper> : <MarkdownWrapper>{ticket?.lastMessage}</MarkdownWrapper>}
+                
+
               </Typography>
             </span>
 

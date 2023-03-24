@@ -5,7 +5,6 @@ import Ticket from "../../models/Ticket";
 import ShowTicketService from "./ShowTicketService";
 import FindOrCreateATicketTrakingService from "./FindOrCreateATicketTrakingService";
 import Setting from "../../models/Setting";
-import Whatsapp from "../../models/Whatsapp";
 
 interface TicketData {
   status?: string;
@@ -32,11 +31,7 @@ const FindOrCreateTicketService = async (
   });
 
   if (ticket) {
-    await ticket.update({ unreadMessages, whatsappId });
-  }
-  
-  if (ticket?.status === "closed") {
-    await ticket.update({ queueId: null, userId: null });
+    await ticket.update({ unreadMessages });
   }
 
   if (!ticket && groupContact) {
@@ -52,7 +47,6 @@ const FindOrCreateTicketService = async (
         status: "pending",
         userId: null,
         unreadMessages,
-        queueId: null,
         companyId
       });
       await FindOrCreateATicketTrakingService({
@@ -85,7 +79,6 @@ const FindOrCreateTicketService = async (
         status: "pending",
         userId: null,
         unreadMessages,
-        queueId: null,
         companyId
       });
       await FindOrCreateATicketTrakingService({
@@ -96,10 +89,6 @@ const FindOrCreateTicketService = async (
       });
     }
   }
-  
-    const whatsapp = await Whatsapp.findOne({
-    where: { id: whatsappId }
-  });
 
   if (!ticket) {
     ticket = await Ticket.create({
@@ -108,7 +97,6 @@ const FindOrCreateTicketService = async (
       isGroup: !!groupContact,
       unreadMessages,
       whatsappId,
-      whatsapp,
       companyId
     });
     await FindOrCreateATicketTrakingService({
@@ -117,6 +105,8 @@ const FindOrCreateTicketService = async (
       whatsappId,
       userId: ticket.userId
     });
+  } else {
+    await ticket.update({ whatsappId });
   }
 
   ticket = await ShowTicketService(ticket.id, companyId);

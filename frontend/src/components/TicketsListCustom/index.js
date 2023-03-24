@@ -192,7 +192,13 @@ const TicketsListCustom = (props) => {
     );
 
     if (profile === "user") {
-      dispatch({ type: "LOAD_TICKETS", payload: filteredTickets });
+      if(status === "closed"){
+        dispatch({ type: "LOAD_TICKETS", payload: tickets });
+      }else{
+        dispatch({ type: "LOAD_TICKETS", payload: filteredTickets });
+      }
+      
+     
     } else {
       dispatch({ type: "LOAD_TICKETS", payload: tickets });
     }

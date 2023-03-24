@@ -8,6 +8,7 @@ interface CompanyData {
   name: string;
   phone?: string;
   email?: string;
+  password?: string;
   status?: boolean;
   planId?: number;
   campaignsEnabled?: boolean;
@@ -24,6 +25,7 @@ const CreateCompanyService = async (
     email,
     status,
     planId,
+    password,
     campaignsEnabled,
     dueDate,
     recurrence
@@ -65,12 +67,154 @@ const CreateCompanyService = async (
     recurrence
   });
 
-  await User.create({
+  const user = await User.create({
     name: company.name,
     email: company.email,
-    password: "mudar123",
+    password: companyData.password,
     profile: "admin",
     companyId: company.id
+  });
+
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "asaas"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "asaas",
+      value: ""
+    },
+  });
+
+  //tokenixc
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "tokenixc"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "tokenixc",
+      value: ""
+    },
+  });
+
+  //ipixc
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "ipixc"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "ipixc",
+      value: ""
+    },
+  });
+
+  //ipmkauth
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "ipmkauth"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "ipmkauth",
+      value: ""
+    },
+  });
+
+  //clientsecretmkauth
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "clientsecretmkauth"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "clientsecretmkauth",
+      value: ""
+    },
+  });
+
+  //clientidmkauth
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "clientidmkauth"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "clientidmkauth",
+      value: ""
+    },
+  });
+
+  //CheckMsgIsGroup
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "CheckMsgIsGroup"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "enabled",
+      value: ""
+    },
+  });
+
+  //CheckMsgIsGroup
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: ""
+    },
+    defaults: {
+      companyId: company.id,
+      key: "call",
+      value: "disabled"
+    },
+  });
+
+  //scheduleType
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "scheduleType"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "scheduleType",
+      value: "disabled"
+    },
+  });
+
+  //userRating
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "userRating"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "userRating",
+      value: "disabled"
+    },
+  });
+
+  //userRating
+  await Setting.findOrCreate({
+    where: {
+      companyId: company.id,
+      key: "chatBotType"
+    },
+    defaults: {
+      companyId: company.id,
+      key: "chatBotType",
+      value: "text"
+    },
   });
 
   if (companyData.campaignsEnabled !== undefined) {
@@ -83,7 +227,8 @@ const CreateCompanyService = async (
         companyId: company.id,
         key: "campaignsEnabled",
         value: `${campaignsEnabled}`
-      }
+      },
+
     });
     if (!created) {
       await setting.update({ value: `${campaignsEnabled}` });

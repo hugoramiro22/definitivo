@@ -10,15 +10,12 @@ import Whatsapp from "../models/Whatsapp";
 
 import ListMessagesService from "../services/MessageServices/ListMessagesService";
 import ShowTicketService from "../services/TicketServices/ShowTicketService";
-import FindOrCreateTicketService from "../services/TicketServices/FindOrCreateTicketService";
-import UpdateTicketService from "../services/TicketServices/UpdateTicketService";
 import DeleteWhatsAppMessage from "../services/WbotServices/DeleteWhatsAppMessage";
 import SendWhatsAppMedia from "../services/WbotServices/SendWhatsAppMedia";
 import SendWhatsAppMessage from "../services/WbotServices/SendWhatsAppMessage";
 import CheckContactNumber from "../services/WbotServices/CheckNumber";
 import CheckIsValidContact from "../services/WbotServices/CheckIsValidContact";
-import GetProfilePicUrl from "../services/WbotServices/GetProfilePicUrl";
-import CreateOrUpdateContactService from "../services/ContactServices/CreateOrUpdateContactService"; 
+
 type IndexQuery = {
   pageNumber: string;
 };
@@ -75,7 +72,7 @@ export const store = async (req: Request, res: Response): Promise<Response> => {
       })
     );
   } else {
-    const send = await SendWhatsAppMessage({ body, ticket, quotedMsg });
+    await SendWhatsAppMessage({ body, ticket, quotedMsg });
   }
 
   return res.send();
@@ -122,24 +119,6 @@ export const send = async (req: Request, res: Response): Promise<Response> => {
 
     const CheckValidNumber = await CheckContactNumber(numberToTest, companyId);
     const number = CheckValidNumber.jid.replace(/\D/g, "");
-    const profilePicUrl = await GetProfilePicUrl(
-      number,
-      companyId
-    );
-    const contactData = {
-      name: `${number}`,
-      number,
-      profilePicUrl,
-      isGroup: false,
-      companyId
-    };
-
-    const contact = await CreateOrUpdateContactService(contactData);
-
-    const createTicket = await FindOrCreateTicketService(contact, whatsapp.id!, 0, companyId);
-
-    const ticket = await ShowTicketService(createTicket.id, companyId);
-  
 
     if (medias) {
       await Promise.all(
@@ -159,18 +138,8 @@ export const send = async (req: Request, res: Response): Promise<Response> => {
         })
       );
     } else {
-      await SendWhatsAppMessage({ body, ticket });
-      setTimeout(async () => {
-        await UpdateTicketService({
-          ticketId: ticket.id,
-          ticketData: { status: "closed" },
-          companyId
-        });
-      }, 1000);
-      await createTicket.update({
-        lastMessage: body,
-      });
-/*       req.app.get("queues").messageQueue.add(
+
+      req.app.get("queues").messageQueue.add(
         "SendMessage",
         {
           whatsappId,
@@ -182,10 +151,8 @@ export const send = async (req: Request, res: Response): Promise<Response> => {
 
         { removeOnComplete: false, attempts: 3 }
 
-      ); */
+      );
     }
-
-    SetTicketMessagesAsRead(ticket);
 
     return res.send({ mensagem: "Mensagem enviada" });
   } catch (err: any) {
